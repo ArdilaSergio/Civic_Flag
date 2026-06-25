@@ -1,20 +1,18 @@
 import json
-from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from lib.analyze_document import analyze_document
 from lib.classify_document import classify_document
 from lib.parse_document import DocumentParseError, parse_document
+from lib.static_assets import INDEX_HTML, MAIN_JS, STYLES_CSS
 from lib.vercel_helpers import load_env_file
 
 
 load_env_file()
 
 app = FastAPI()
-ROOT = Path(__file__).resolve().parents[1]
-PUBLIC = ROOT / "public"
 
 
 @app.get("/api/health")
@@ -58,12 +56,13 @@ async def analyze_endpoint(file: UploadFile = File(...), issues: str = Form("[]"
 
 @app.get("/")
 def frontend_index():
-    return FileResponse(PUBLIC / "index.html")
+    return HTMLResponse(INDEX_HTML)
 
 
 @app.get("/{path:path}")
 def frontend_static(path: str):
-    asset = (PUBLIC / path).resolve()
-    if PUBLIC.resolve() in asset.parents and asset.is_file():
-        return FileResponse(asset)
-    return FileResponse(PUBLIC / "index.html")
+    if path == "main.js":
+        return Response(MAIN_JS, media_type="text/javascript")
+    if path == "styles.css":
+        return Response(STYLES_CSS, media_type="text/css")
+    return HTMLResponse(INDEX_HTML)

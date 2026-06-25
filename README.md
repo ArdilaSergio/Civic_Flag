@@ -46,7 +46,7 @@ AI calls are isolated in `lib/analyze_document.py` in `analyze_document_with_ai`
 
 This project is ready for Vercel as a static frontend plus Python API functions:
 
-- Static files are served from `public/`.
+- Frontend source files live in `public/`; the Vercel FastAPI app serves embedded copies of those assets.
 - `/api/parse` and `/api/analyze` are handled by the FastAPI app in `api/index.py`.
 - Python dependencies are listed in `requirements.txt`.
 - The Python runtime is pinned with `.python-version`.
