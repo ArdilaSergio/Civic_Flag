@@ -1,0 +1,10 @@
+{
+  "name": "civic-flag",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MVP web application for AI-assisted civic document review.",
+  "scripts": {
+    "dev": "python3 server.py",
+    "start": "python3 server.py"
+  }
+}
