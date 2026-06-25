@@ -51,6 +51,7 @@ This project is ready for Vercel as a static frontend plus Python API functions:
 - `/api/analyze` is handled by `api/analyze.py`.
 - Python dependencies are listed in `requirements.txt`.
 - The Python runtime is pinned with `.python-version`.
+- Vercel auto-detects Python functions in the `api/` directory.
 
 Deployment steps:
 
