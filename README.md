@@ -7,7 +7,7 @@ Civic Flag is an MVP civic document review tool. Upload a public agenda, staff r
 From this folder:
 
 ```bash
-python3 server.py
+python3 local_server.py
 ```
 
 Then open:
@@ -19,7 +19,7 @@ http://localhost:5173
 If your shell does not have Python on the path, use the bundled runtime in the Codex desktop app:
 
 ```bash
-/Users/sergioardila/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 server.py
+/Users/sergioardila/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 local_server.py
 ```
 
 ## Environment Variables

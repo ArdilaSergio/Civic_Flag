@@ -1,3 +1,9 @@
+"""Local-only development server for Civic Flag.
+
+Vercel deploys the Python functions in /api. This file intentionally avoids
+Vercel's reserved entrypoint names such as server.py, app.py, and main.py.
+"""
+
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import cgi
