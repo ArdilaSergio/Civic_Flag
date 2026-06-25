@@ -42,6 +42,31 @@ OPENAI_MODEL=gpt-5.4-mini
 
 AI calls are isolated in `lib/analyze_document.py` in `analyze_document_with_ai`. The fallback is isolated in `analyze_document_with_keyword_fallback`. The reusable prompt is in `lib/prompt_templates.py`. The OpenAI path uses structured JSON output so the app receives the same fields every time.
 
+## Deploy To Vercel
+
+This project is ready for Vercel as a static frontend plus Python API functions:
+
+- Static files are served from `public/`.
+- `/api/parse` is handled by `api/parse.py`.
+- `/api/analyze` is handled by `api/analyze.py`.
+- Python dependencies are listed in `requirements.txt`.
+- The Python runtime is pinned with `.python-version`.
+
+Deployment steps:
+
+1. Push this repo to GitHub.
+2. Import the repo in Vercel.
+3. Add these Environment Variables in the Vercel project settings:
+
+```bash
+OPENAI_API_KEY=your_api_key_here
+OPENAI_MODEL=gpt-5.4-mini
+```
+
+`OPENAI_MODEL` is optional. Do not upload `.env` to Vercel or commit it to GitHub.
+
+4. Deploy. Vercel will serve the frontend and route API requests to the Python functions.
+
 ## What Works Now
 
 - Upload support for PDF, DOC, DOCX, and TXT.
@@ -55,6 +80,7 @@ AI calls are isolated in `lib/analyze_document.py` in `analyze_document_with_ai`
 - Structured Civic Flags with related issues, source excerpts, urgency, community impact, follow-up, public comment angle, and confidence.
 - Civic Brief with summary, main issues found, top flags, next action, suggested audience, and caveats.
 - Prepared Deliverables with executive summary, priority review list, follow-up questions, public comment talking points, outreach list, and monitoring notes.
+- Vercel deployment structure with Python API functions.
 
 ## Test With A Real Document
 

@@ -5,6 +5,7 @@
   "description": "MVP web application for AI-assisted civic document review.",
   "scripts": {
     "dev": "python3 server.py",
-    "start": "python3 server.py"
+    "start": "python3 server.py",
+    "vercel-build": "echo \"Static frontend and Python API functions are ready\""
   }
 }
