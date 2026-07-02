@@ -13,7 +13,7 @@ import sys
 
 from lib.analyze_document import analyze_document
 from lib.classify_document import classify_document
-from lib.parse_document import DocumentParseError, parse_document
+from lib.parse_document import DocumentParseError, parse_document, parse_extracted_text
 from lib.vercel_helpers import load_env_file
 
 
@@ -43,6 +43,12 @@ class CivicFlagHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/analyze":
             self.handle_analyze()
             return
+        if self.path == "/api/parse-text":
+            self.handle_parse_text()
+            return
+        if self.path == "/api/analyze-text":
+            self.handle_analyze_text()
+            return
         self.send_json({"error": "Not found"}, status=404)
 
     def parse_form(self):
@@ -67,6 +73,12 @@ class CivicFlagHandler(SimpleHTTPRequestHandler):
             except json.JSONDecodeError:
                 issues = []
         return file_item, issues
+
+    def parse_json_body(self):
+        length = int(self.headers.get("content-length", "0") or "0")
+        if not length:
+            raise ValueError("Missing request body.")
+        return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def handle_parse(self):
         try:
@@ -94,6 +106,36 @@ class CivicFlagHandler(SimpleHTTPRequestHandler):
             result = analyze_document(parsed.text, parsed.metadata, relevance, issues)
             self.send_json(result)
         except (ValueError, DocumentParseError) as exc:
+            self.send_json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            self.send_json({"error": f"Analysis failed: {exc}"}, status=500)
+
+    def handle_parse_text(self):
+        try:
+            data = self.parse_json_body()
+            parsed = parse_extracted_text(data.get("filename", "uploaded-document.pdf"), data.get("text", ""))
+            relevance = classify_document(parsed.text)
+            self.send_json(
+                {
+                    "metadata": parsed.metadata.to_dict(),
+                    "text_length": len(parsed.text),
+                    "preview": parsed.text[:900],
+                    "relevance": relevance.to_dict(),
+                }
+            )
+        except (ValueError, json.JSONDecodeError, DocumentParseError) as exc:
+            self.send_json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            self.send_json({"error": f"Text extraction failed: {exc}"}, status=500)
+
+    def handle_analyze_text(self):
+        try:
+            data = self.parse_json_body()
+            parsed = parse_extracted_text(data.get("filename", "uploaded-document.pdf"), data.get("text", ""))
+            relevance = classify_document(parsed.text)
+            result = analyze_document(parsed.text, parsed.metadata, relevance, data.get("issues", []))
+            self.send_json(result)
+        except (ValueError, json.JSONDecodeError, DocumentParseError) as exc:
             self.send_json({"error": str(exc)}, status=400)
         except Exception as exc:
             self.send_json({"error": f"Analysis failed: {exc}"}, status=500)

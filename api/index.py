@@ -1,11 +1,11 @@
 import json
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from lib.analyze_document import analyze_document
 from lib.classify_document import classify_document
-from lib.parse_document import DocumentParseError, parse_document
+from lib.parse_document import DocumentParseError, parse_document, parse_extracted_text
 from lib.static_assets import INDEX_HTML, MAIN_JS, STYLES_CSS
 from lib.vercel_helpers import load_env_file
 
@@ -37,6 +37,24 @@ async def parse_endpoint(file: UploadFile = File(...)):
         return JSONResponse({"error": f"Text extraction failed: {exc}"}, status_code=500)
 
 
+@app.post("/api/parse-text")
+async def parse_text_endpoint(request: Request):
+    try:
+        data = await request.json()
+        parsed = parse_extracted_text(data.get("filename", "uploaded-document.pdf"), data.get("text", ""))
+        relevance = classify_document(parsed.text)
+        return {
+            "metadata": parsed.metadata.to_dict(),
+            "text_length": len(parsed.text),
+            "preview": parsed.text[:900],
+            "relevance": relevance.to_dict(),
+        }
+    except DocumentParseError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"error": f"Text extraction failed: {exc}"}, status_code=500)
+
+
 @app.post("/api/analyze")
 async def analyze_endpoint(file: UploadFile = File(...), issues: str = Form("[]")):
     try:
@@ -46,6 +64,20 @@ async def analyze_endpoint(file: UploadFile = File(...), issues: str = Form("[]"
 
     try:
         parsed = parse_document(file.filename, await file.read())
+        relevance = classify_document(parsed.text)
+        return analyze_document(parsed.text, parsed.metadata, relevance, selected_issues)
+    except DocumentParseError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"error": f"Analysis failed: {exc}"}, status_code=500)
+
+
+@app.post("/api/analyze-text")
+async def analyze_text_endpoint(request: Request):
+    try:
+        data = await request.json()
+        selected_issues = data.get("issues", [])
+        parsed = parse_extracted_text(data.get("filename", "uploaded-document.pdf"), data.get("text", ""))
         relevance = classify_document(parsed.text)
         return analyze_document(parsed.text, parsed.metadata, relevance, selected_issues)
     except DocumentParseError as exc:

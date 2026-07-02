@@ -67,7 +67,7 @@ OPENAI_MODEL=gpt-5.4-mini
 
 4. Deploy. Vercel will serve the frontend and route API requests to the Python functions.
 
-Hosted upload note: Vercel Functions have a 4.5 MB request body limit. The frontend blocks files over 4 MB and asks users to upload a smaller PDF or a TXT export instead.
+Hosted upload note: Vercel Functions have a 4.5 MB request body limit. For large PDFs, the frontend extracts text in the browser first and sends only the extracted text to the API. Large non-PDF uploads should be converted to TXT or reduced below 4 MB.
 
 ## What Works Now
 
@@ -97,7 +97,7 @@ Hosted upload note: Vercel Functions have a 4.5 MB request body limit. The front
 - Real AI analysis requires `OPENAI_API_KEY`; otherwise the app uses the local keyword fallback and labels that mode clearly.
 - Legacy `.doc` parsing is best-effort because old binary Word files vary widely.
 - PDF extraction depends on embedded text. Scanned image PDFs may return little or no usable text.
-- Hosted Vercel uploads are limited to files under 4 MB because of the platform request body limit.
+- Hosted Vercel uploads are limited by the platform request body limit. Large PDFs can be processed through browser-side text extraction, but scanned PDFs may still need OCR or a TXT export.
 - Metadata detection is conservative and returns `Not detected` when unsure.
 
 ## Suggested Next Improvements

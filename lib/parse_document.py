@@ -37,6 +37,15 @@ def parse_document(filename, content):
     return ParsedDocument(text=text, metadata=detect_metadata(filename, text))
 
 
+def parse_extracted_text(filename, text):
+    text = normalize_text(text)
+    if not text:
+        raise DocumentParseError("No readable text could be extracted from this document.")
+    if len(text) < 80:
+        raise DocumentParseError("This document has very little usable text. Try uploading a text-based PDF, DOCX, or TXT file.")
+    return ParsedDocument(text=text, metadata=detect_metadata(filename, text))
+
+
 def _decode_text(content):
     for encoding in ("utf-8", "utf-16", "latin-1"):
         try:

@@ -18,10 +18,15 @@ const DEFAULT_ISSUES = [
 ];
 
 const HOSTED_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+const HOSTED_MAX_TEXT_BYTES = 3.8 * 1024 * 1024;
+const PDFJS_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.mjs";
+const PDFJS_WORKER_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.mjs";
 
 const state = {
   file: null,
   fileTooLarge: false,
+  extractedText: "",
+  uploadNote: "",
   customIssues: [],
   selectedIssues: new Set(["Housing", "Transportation", "Accessibility", "Budget/funding"]),
   metadata: null,
@@ -113,7 +118,7 @@ function UploadBox() {
       </div>
       <label class="upload-box" id="drop-zone">
         <strong>Drop a document here or click to browse</strong>
-        <span class="helper">PDF, DOC, DOCX, and TXT files supported. Hosted uploads must be ${formatBytes(HOSTED_MAX_UPLOAD_BYTES)} or smaller. TXT files preferred for best text extraction accuracy.</span>
+        <span class="helper">PDF, DOC, DOCX, and TXT files supported. Large PDFs are read in your browser before analysis. TXT files preferred for best text extraction accuracy.</span>
         <input class="hidden" id="file-input" type="file" accept=".pdf,.doc,.docx,.txt" />
       </label>
       <div class="selected-file">
@@ -126,6 +131,7 @@ function UploadBox() {
       </button>
       ${noIssuesSelected ? `<p class="helper action-note">Select at least one issue of interest to start reviewing.</p>` : ""}
       ${state.parsing ? `<p class="helper">Reading document text and metadata...</p>` : ""}
+      ${state.uploadNote ? `<div class="status good">${escapeHtml(state.uploadNote)}</div>` : ""}
       ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ""}
     </section>
   `;
@@ -378,14 +384,20 @@ async function setFile(file) {
   state.file = file;
   state.result = null;
   state.error = "";
+  state.uploadNote = "";
+  state.extractedText = "";
   state.fileTooLarge = false;
   if (file.size > HOSTED_MAX_UPLOAD_BYTES) {
-    state.metadata = null;
-    state.relevance = null;
-    state.fileTooLarge = true;
-    state.error = `${file.name} is ${formatBytes(file.size)}, which is too large for the hosted version. Vercel Functions accept request bodies up to about 4.5 MB, so please upload a smaller file or export/convert the agenda to TXT before reviewing.`;
-    state.parsing = false;
-    render();
+    if (isPdfFile(file)) {
+      await setLargePdfFile(file);
+    } else {
+      state.metadata = null;
+      state.relevance = null;
+      state.fileTooLarge = true;
+      state.error = `${file.name} is ${formatBytes(file.size)}, which is too large for the hosted version. Please upload a file under ${formatBytes(HOSTED_MAX_UPLOAD_BYTES)}, or export/convert the document to TXT before reviewing.`;
+      state.parsing = false;
+      render();
+    }
     return;
   }
   state.parsing = true;
@@ -410,7 +422,9 @@ async function analyze() {
   state.error = "";
   render();
   try {
-    state.result = await postFile("/api/analyze", state.file, [...state.selectedIssues]);
+    state.result = state.extractedText
+      ? await postText("/api/analyze-text", state.file.name, state.extractedText, [...state.selectedIssues])
+      : await postFile("/api/analyze", state.file, [...state.selectedIssues]);
     state.metadata = state.result.metadata;
     state.relevance = {
       document_is_policy_related: state.result.document_is_policy_related,
@@ -421,6 +435,32 @@ async function analyze() {
     state.error = error.message;
   } finally {
     state.loading = false;
+    render();
+  }
+}
+
+async function setLargePdfFile(file) {
+  state.parsing = true;
+  state.uploadNote = `This PDF is ${formatBytes(file.size)}, so Civic Flag is extracting text in your browser before sending it for analysis.`;
+  render();
+  try {
+    const text = await extractPdfTextInBrowser(file);
+    const textBytes = new Blob([text]).size;
+    if (textBytes > HOSTED_MAX_TEXT_BYTES) {
+      throw new Error(`The extracted text is ${formatBytes(textBytes)}, which is still too large for the hosted analyzer. Try splitting the agenda or exporting only the relevant agenda sections to TXT.`);
+    }
+    state.extractedText = text;
+    const data = await postText("/api/parse-text", file.name, text);
+    state.metadata = data.metadata;
+    state.relevance = data.relevance;
+    state.uploadNote = `Large PDF processed in your browser. Extracted ${formatBytes(textBytes)} of text for review.`;
+  } catch (error) {
+    state.metadata = null;
+    state.relevance = null;
+    state.fileTooLarge = true;
+    state.error = error.message || "This PDF could not be read in the browser. Try exporting the agenda to TXT and uploading that file.";
+  } finally {
+    state.parsing = false;
     render();
   }
 }
@@ -438,6 +478,53 @@ async function postFile(url, file, issues = []) {
     throw new Error(data.error || `The request failed with status ${response.status}.`);
   }
   return data;
+}
+
+async function postText(url, filename, text, issues = []) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, text, issues }),
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const data = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
+  if (!response.ok) {
+    throw new Error(data.error || `The request failed with status ${response.status}.`);
+  }
+  return data;
+}
+
+async function extractPdfTextInBrowser(file) {
+  let pdfjsLib;
+  try {
+    pdfjsLib = await import(PDFJS_URL);
+  } catch {
+    throw new Error("Civic Flag could not load the browser PDF reader. Try refreshing the page, or export the agenda to TXT and upload that file.");
+  }
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const pages = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const pageText = content.items.map((item) => item.str || "").join(" ").trim();
+    if (pageText) pages.push(`Page ${pageNumber}\n${pageText}`);
+  }
+
+  const text = pages.join("\n\n").trim();
+  if (text.length < 80) {
+    throw new Error("This PDF did not contain enough extractable text. It may be scanned or image-based. Try OCR or export it to TXT before uploading.");
+  }
+  return text;
+}
+
+function isPdfFile(file) {
+  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 }
 
 function formatBytes(bytes) {
