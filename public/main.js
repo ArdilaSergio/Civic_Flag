@@ -17,8 +17,11 @@ const DEFAULT_ISSUES = [
   "Homelessness services",
 ];
 
+const HOSTED_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
 const state = {
   file: null,
+  fileTooLarge: false,
   customIssues: [],
   selectedIssues: new Set(["Housing", "Transportation", "Accessibility", "Budget/funding"]),
   metadata: null,
@@ -98,6 +101,7 @@ function Hero() {
 function UploadBox() {
   const fileName = state.file ? escapeHtml(state.file.name) : "No file selected";
   const noIssuesSelected = state.selectedIssues.size === 0;
+  const reviewDisabled = !state.file || state.fileTooLarge || noIssuesSelected || state.loading || state.parsing;
   return `
     <section class="panel upload-card" id="upload-panel">
       <div class="upload-card-head">
@@ -109,7 +113,7 @@ function UploadBox() {
       </div>
       <label class="upload-box" id="drop-zone">
         <strong>Drop a document here or click to browse</strong>
-        <span class="helper">PDF, DOC, DOCX, and TXT files supported. TXT files preferred for best text extraction accuracy.</span>
+        <span class="helper">PDF, DOC, DOCX, and TXT files supported. Hosted uploads must be ${formatBytes(HOSTED_MAX_UPLOAD_BYTES)} or smaller. TXT files preferred for best text extraction accuracy.</span>
         <input class="hidden" id="file-input" type="file" accept=".pdf,.doc,.docx,.txt" />
       </label>
       <div class="selected-file">
@@ -117,7 +121,7 @@ function UploadBox() {
         <strong>${fileName}</strong>
       </div>
       ${IssuesOfInterest()}
-      <button class="button primary upload-action" data-action="analyze" ${!state.file || noIssuesSelected || state.loading || state.parsing ? "disabled" : ""}>
+      <button class="button primary upload-action" data-action="analyze" ${reviewDisabled ? "disabled" : ""}>
         ${flagIcon()} ${state.loading ? "Reviewing..." : "Start Reviewing"}
       </button>
       ${noIssuesSelected ? `<p class="helper action-note">Select at least one issue of interest to start reviewing.</p>` : ""}
@@ -374,6 +378,16 @@ async function setFile(file) {
   state.file = file;
   state.result = null;
   state.error = "";
+  state.fileTooLarge = false;
+  if (file.size > HOSTED_MAX_UPLOAD_BYTES) {
+    state.metadata = null;
+    state.relevance = null;
+    state.fileTooLarge = true;
+    state.error = `${file.name} is ${formatBytes(file.size)}, which is too large for the hosted version. Vercel Functions accept request bodies up to about 4.5 MB, so please upload a smaller file or export/convert the agenda to TXT before reviewing.`;
+    state.parsing = false;
+    render();
+    return;
+  }
   state.parsing = true;
   render();
   try {
@@ -391,7 +405,7 @@ async function setFile(file) {
 }
 
 async function analyze() {
-  if (!state.file) return;
+  if (!state.file || state.fileTooLarge) return;
   state.loading = true;
   state.error = "";
   render();
@@ -416,9 +430,19 @@ async function postFile(url, file, issues = []) {
   form.append("file", file);
   form.append("issues", JSON.stringify(issues));
   const response = await fetch(url, { method: "POST", body: form });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "The request failed.");
+  const contentType = response.headers.get("content-type") || "";
+  const data = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
+  if (!response.ok) {
+    throw new Error(data.error || `The request failed with status ${response.status}.`);
+  }
   return data;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return "0 MB";
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 1 : 2)} MB`;
 }
 
 function escapeHtml(value) {
