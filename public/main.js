@@ -18,7 +18,7 @@ const DEFAULT_ISSUES = [
 ];
 
 const HOSTED_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
-const HOSTED_MAX_TEXT_BYTES = 3.8 * 1024 * 1024;
+const HOSTED_MAX_TEXT_BYTES = 3.5 * 1024 * 1024;
 const PDFJS_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.mjs";
 const PDFJS_WORKER_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.mjs";
 
@@ -118,7 +118,7 @@ function UploadBox() {
       </div>
       <label class="upload-box" id="drop-zone">
         <strong>Drop a document here or click to browse</strong>
-        <span class="helper">PDF, DOC, DOCX, and TXT files supported. Large PDFs are read in your browser before analysis. TXT files preferred for best text extraction accuracy.</span>
+        <span class="helper">PDF, DOC, DOCX, and TXT files supported. PDFs are read in your browser before analysis. TXT files preferred for best text extraction accuracy.</span>
         <input class="hidden" id="file-input" type="file" accept=".pdf,.doc,.docx,.txt" />
       </label>
       <div class="selected-file">
@@ -387,17 +387,17 @@ async function setFile(file) {
   state.uploadNote = "";
   state.extractedText = "";
   state.fileTooLarge = false;
+  if (isPdfFile(file)) {
+    await setPdfFile(file);
+    return;
+  }
   if (file.size > HOSTED_MAX_UPLOAD_BYTES) {
-    if (isPdfFile(file)) {
-      await setLargePdfFile(file);
-    } else {
-      state.metadata = null;
-      state.relevance = null;
-      state.fileTooLarge = true;
-      state.error = `${file.name} is ${formatBytes(file.size)}, which is too large for the hosted version. Please upload a file under ${formatBytes(HOSTED_MAX_UPLOAD_BYTES)}, or export/convert the document to TXT before reviewing.`;
-      state.parsing = false;
-      render();
-    }
+    state.metadata = null;
+    state.relevance = null;
+    state.fileTooLarge = true;
+    state.error = `${file.name} is ${formatBytes(file.size)}, which is too large for direct hosted upload. Please upload a file under ${formatBytes(HOSTED_MAX_UPLOAD_BYTES)}, or export/convert the document to TXT before reviewing.`;
+    state.parsing = false;
+    render();
     return;
   }
   state.parsing = true;
@@ -439,21 +439,22 @@ async function analyze() {
   }
 }
 
-async function setLargePdfFile(file) {
+async function setPdfFile(file) {
   state.parsing = true;
-  state.uploadNote = `This PDF is ${formatBytes(file.size)}, so Civic Flag is extracting text in your browser before sending it for analysis.`;
+  state.uploadNote = `Civic Flag is extracting this PDF's text in your browser before sending it for analysis.`;
   render();
   try {
-    const text = await extractPdfTextInBrowser(file);
+    const fullText = await extractPdfTextInBrowser(file);
+    const fullTextBytes = new Blob([fullText]).size;
+    const { text, truncated } = limitTextPayload(fullText, HOSTED_MAX_TEXT_BYTES);
     const textBytes = new Blob([text]).size;
-    if (textBytes > HOSTED_MAX_TEXT_BYTES) {
-      throw new Error(`The extracted text is ${formatBytes(textBytes)}, which is still too large for the hosted analyzer. Try splitting the agenda or exporting only the relevant agenda sections to TXT.`);
-    }
     state.extractedText = text;
     const data = await postText("/api/parse-text", file.name, text);
     state.metadata = data.metadata;
     state.relevance = data.relevance;
-    state.uploadNote = `Large PDF processed in your browser. Extracted ${formatBytes(textBytes)} of text for review.`;
+    state.uploadNote = truncated
+      ? `PDF processed in your browser. The extracted text was ${formatBytes(fullTextBytes)}, so Civic Flag sent the first ${formatBytes(textBytes)} for online review.`
+      : `PDF processed in your browser. Extracted ${formatBytes(textBytes)} of text for review.`;
   } catch (error) {
     state.metadata = null;
     state.relevance = null;
@@ -525,6 +526,32 @@ async function extractPdfTextInBrowser(file) {
 
 function isPdfFile(file) {
   return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
+
+function limitTextPayload(text, maxBytes) {
+  const encoder = new TextEncoder();
+  if (encoder.encode(text).length <= maxBytes) {
+    return { text, truncated: false };
+  }
+
+  const suffix = "\n\n[Text truncated to fit hosted analysis limits.]";
+  const suffixBytes = encoder.encode(suffix).length;
+  const targetBytes = Math.max(0, maxBytes - suffixBytes);
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (encoder.encode(text.slice(0, mid)).length <= targetBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return {
+    text: `${text.slice(0, low)}${suffix}`,
+    truncated: true,
+  };
 }
 
 function formatBytes(bytes) {
