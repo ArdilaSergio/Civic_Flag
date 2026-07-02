@@ -39,6 +39,10 @@ ISSUE_KEYWORDS = {
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 MAX_DOCUMENT_CHARS = 90000
+AGENDA_SCOPE_CAVEAT = (
+    "Routine meeting procedures, public participation boilerplate, ADA accommodation "
+    "logistics, and prior-meeting minutes or summaries were excluded from Civic Flags."
+)
 
 
 def analyze_document(text, metadata, relevance, selected_issues):
@@ -82,6 +86,9 @@ def analyze_document_with_ai(text, metadata, relevance, selected_issues):
                                     "If a value is not present in the document, return 'Not detected'.",
                                     "Identify related policy concepts even when an exact selected issue phrase does not appear.",
                                     "Every Civic Flag must include a supporting source excerpt from the uploaded document.",
+                                    "Flag only substantive current agenda items or substantive current document content.",
+                                    "Do not flag routine meeting procedures, public comment instructions, ADA accommodation boilerplate, meeting access logistics, roll call, adjournment, or approval of minutes.",
+                                    "For agendas and agenda packets, ignore minutes, summaries, recaps, attendance lists, vote records, and action summaries from prior meetings.",
                                     "If the document is not policy-related, set document_is_policy_related to false and return no flagged items.",
                                 ],
                                 "document_text": text[:MAX_DOCUMENT_CHARS],
@@ -108,7 +115,7 @@ def analyze_document_with_ai(text, metadata, relevance, selected_issues):
     result["analysis_mode"] = "AI analysis mode"
     result["analysis_mode_explanation"] = "Civic Flag used the AI civic document review function to analyze meaning, context, selected issues, and potential community impact."
     result["metadata"] = normalize_metadata(result.get("metadata"), metadata)
-    return validate_analysis_result(result)
+    return apply_agenda_scope_filter(validate_analysis_result(result))
 
 
 def post_openai_json(payload):
@@ -340,6 +347,8 @@ def analyze_document_with_keyword_fallback(text, metadata, relevance, selected_i
     flags = []
     seen = set()
     for chunk in chunks:
+        if looks_like_excluded_agenda_material(chunk):
+            continue
         related = matching_issues(chunk, issues)
         if not related:
             continue
@@ -355,6 +364,7 @@ def analyze_document_with_keyword_fallback(text, metadata, relevance, selected_i
         if len(flags) >= 8:
             break
 
+    flags = filter_reportable_flags(flags)
     return {
         "analysis_mode": "Fallback keyword mode",
         "analysis_mode_explanation": "No OpenAI API key is configured, so Civic Flag used a limited local keyword fallback. Results may miss related concepts that require AI reasoning.",
@@ -369,10 +379,23 @@ def analyze_document_with_keyword_fallback(text, metadata, relevance, selected_i
 
 
 def split_into_chunks(text):
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    boundary = re.compile(
+        r"\b((?:agenda item|item|section)\s+[A-Z]?\d+[A-Z]?[\w.-]*[:\s-]|"
+        r"(?:resolution|ordinance)\s+(?:no\.?\s*)?[A-Z]?\d{2,}[\w.-]*|"
+        r"meeting procedures?|public comment|approval of minutes|approve (?:the )?minutes|"
+        r"call to order|roll call|adjournment)\b",
+        re.IGNORECASE,
+    )
+    prepared_text = boundary.sub(r"\n\1", text)
+    lines = [line.strip() for line in prepared_text.splitlines() if line.strip()]
     chunks = []
     current = []
-    item_start = re.compile(r"^(item|section|agenda item|resolution|ordinance)\s+[a-z0-9.-]+", re.IGNORECASE)
+    item_start = re.compile(
+        r"^(item|section|agenda item|resolution|ordinance)\s+[a-z0-9.-]+|"
+        r"^(meeting procedures?|public comment|approval of minutes|approve (?:the )?minutes|"
+        r"call to order|roll call|adjournment)\b",
+        re.IGNORECASE,
+    )
     for line in lines:
         if current and (item_start.search(line) or len(" ".join(current)) > 900):
             chunks.append(" ".join(current))
@@ -429,10 +452,185 @@ def detect_title(chunk, related):
 def looks_like_header_only(chunk):
     lowered = chunk.lower()
     has_identifier = detect_identifier(chunk) != "Not detected"
-    action_terms = ["approve", "adopt", "consider", "receive", "authorize", "report", "grant", "hearing", "public comment"]
+    action_terms = ["approve", "adopt", "consider", "receive", "authorize", "report", "grant", "hearing"]
     if has_identifier:
         return False
     return len(chunk) < 160 and not any(term in lowered for term in action_terms)
+
+
+def apply_agenda_scope_filter(result):
+    flags = result.get("flagged_items") or []
+    filtered_flags = filter_reportable_flags(flags)
+    removed_count = len(flags) - len(filtered_flags)
+    result["flagged_items"] = filtered_flags
+    if removed_count:
+        result["analysis_mode_explanation"] = append_sentence(
+            result.get("analysis_mode_explanation", ""),
+            AGENDA_SCOPE_CAVEAT,
+        )
+        result["civic_brief"] = refresh_brief_after_scope_filter(
+            result.get("civic_brief"),
+            filtered_flags,
+            removed_count,
+        )
+        result["prepared_deliverables"] = refresh_deliverables_after_scope_filter(
+            result.get("prepared_deliverables"),
+            filtered_flags,
+            removed_count,
+        )
+    return result
+
+
+def filter_reportable_flags(flags):
+    return [flag for flag in flags if not flag_looks_excluded(flag)]
+
+
+def flag_looks_excluded(flag):
+    if not isinstance(flag, dict):
+        return False
+    fields = [
+        flag.get("title", ""),
+        flag.get("item_number_or_identifier", ""),
+        flag.get("relevance_summary", ""),
+        flag.get("source_excerpt", ""),
+        flag.get("community_impact", ""),
+        " ".join(flag.get("suggested_follow_up", []) or []),
+        flag.get("possible_public_comment_angle", ""),
+    ]
+    return looks_like_excluded_agenda_material(" | ".join(str(field) for field in fields if field))
+
+
+def looks_like_excluded_agenda_material(text):
+    lowered = normalize_scope_text(text)
+    if not lowered:
+        return False
+
+    if re.search(r"\b(meeting procedures?|procedural instructions?|meeting logistics|public participation instructions?)\b", lowered):
+        return True
+
+    if re.search(r"\b(call to order|roll call|pledge of allegiance|invocation|approval of (?:the )?agenda|adjournment)\b", lowered):
+        return True
+
+    if re.search(r"\b(approval of minutes|approve (?:the )?minutes|minutes of (?:the )?(?:regular|special|adjourned)? ?meeting|previous meeting minutes|prior meeting minutes)\b", lowered):
+        return True
+
+    if "minutes" in lowered and re.search(r"\b(prior meeting|previous meeting|regular meeting held|special meeting held|meeting was called to order|motion carried|motion passed|seconded by|members present|members absent)\b", lowered):
+        return True
+
+    public_comment_logistics = (
+        "public comment" in lowered
+        and re.search(r"\b(submit|email|mail|speaker card|comment card|clerk|city clerk|deadline|livestream|zoom|telephone|speak at|speaking time|meeting access)\b", lowered)
+    )
+    if public_comment_logistics and not has_substantive_policy_context(lowered):
+        return True
+
+    ada_logistics = (
+        re.search(r"\b(americans with disabilities act|reasonable modification|reasonable accommodation|ada accommodation|disability accommodation)\b", lowered)
+        and re.search(r"\b(clerk|city clerk|request|contact|meeting|agenda|hours|days|email|phone|telephone|assistive listening)\b", lowered)
+    )
+    if ada_logistics and not has_substantive_policy_context(lowered):
+        return True
+
+    return False
+
+
+def has_substantive_policy_context(lowered_text):
+    return bool(
+        re.search(
+            r"\b(ordinance|resolution|contract|grant|funding|budget|capital project|staff report|"
+            r"policy change|policy update|implementation|program|services|housing|transit|"
+            r"transportation|public safety|fare|accessibility improvements|transition plan)\b",
+            lowered_text,
+        )
+    )
+
+
+def normalize_scope_text(text):
+    return re.sub(r"\s+", " ", str(text or "").lower()).strip()
+
+
+def refresh_brief_after_scope_filter(brief, flags, removed_count):
+    brief = brief.copy() if isinstance(brief, dict) else {}
+    titles = [flag.get("title", "Not detected") for flag in flags[:3]]
+    issues = sorted({issue for flag in flags for issue in flag.get("related_issues", [])})
+
+    brief.setdefault("overall_document_summary", "No summary available from extracted text.")
+    brief["main_issues_found"] = issues
+    brief["top_3_flags_to_review"] = titles
+    if not flags:
+        brief["policy_relevance"] = (
+            "The document appears policy-related, but no substantive current agenda items "
+            "strongly matched the selected issues after excluding procedural and prior-meeting material."
+        )
+        brief["recommended_next_action"] = (
+            "Review the current substantive agenda items or staff reports directly, or try broader issues of interest."
+        )
+        brief["suggested_audience_to_notify"] = "No specific audience identified from the selected issues."
+    brief["important_caveats"] = append_sentence(
+        brief.get("important_caveats", ""),
+        f"{AGENDA_SCOPE_CAVEAT} {removed_count} non-substantive or prior-meeting item(s) were removed from the report.",
+    )
+    return brief
+
+
+def refresh_deliverables_after_scope_filter(deliverables, flags, removed_count):
+    deliverables = deliverables.copy() if isinstance(deliverables, dict) else {}
+    if not flags:
+        deliverables["executive_summary"] = (
+            "No substantive current agenda items were flagged for the selected issues after excluding "
+            "meeting procedures and prior-meeting materials."
+        )
+        deliverables["priority_review_list"] = []
+        deliverables["suggested_follow_up_questions"] = []
+        deliverables["possible_public_comment_talking_points"] = []
+        deliverables["suggested_outreach_or_notification_list"] = []
+    else:
+        deliverables["priority_review_list"] = [
+            f"{flag.get('urgency_level', 'Medium')} priority: {flag.get('title', 'Not detected')} ({flag.get('item_number_or_identifier', 'Not detected')})"
+            for flag in flags[:5]
+        ]
+        deliverables["suggested_follow_up_questions"] = filter_excluded_strings(
+            deliverables.get("suggested_follow_up_questions", [])
+        ) or [
+            f"What decision, deadline, implementation step, or community impact is tied to {flag.get('title', 'this item')}?"
+            for flag in flags[:3]
+        ]
+        deliverables["possible_public_comment_talking_points"] = [
+            flag.get("possible_public_comment_angle", "")
+            for flag in flags
+            if flag.get("possible_public_comment_angle")
+        ][:4]
+        deliverables["suggested_outreach_or_notification_list"] = filter_excluded_strings(
+            deliverables.get("suggested_outreach_or_notification_list", [])
+        )
+
+    deliverables.setdefault("executive_summary", "A scoped review packet was prepared from the substantive current document content.")
+    deliverables.setdefault("priority_review_list", [])
+    deliverables.setdefault("suggested_follow_up_questions", [])
+    deliverables.setdefault("possible_public_comment_talking_points", [])
+    deliverables.setdefault("suggested_outreach_or_notification_list", [])
+    deliverables["notes_for_future_monitoring"] = append_sentence(
+        deliverables.get("notes_for_future_monitoring", ""),
+        f"{AGENDA_SCOPE_CAVEAT} {removed_count} non-substantive or prior-meeting item(s) were removed.",
+    )
+    return deliverables
+
+
+def filter_excluded_strings(values):
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if value and not looks_like_excluded_agenda_material(value)]
+
+
+def append_sentence(existing, sentence):
+    existing = str(existing or "").strip()
+    sentence = str(sentence or "").strip()
+    if not sentence or sentence in existing:
+        return existing
+    if not existing:
+        return sentence
+    separator = "" if existing.endswith((".", "!", "?")) else "."
+    return f"{existing}{separator} {sentence}"
 
 
 def build_flag(chunk, title, identifier, related):

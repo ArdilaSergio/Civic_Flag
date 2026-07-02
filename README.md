@@ -76,6 +76,7 @@ Hosted upload note: Vercel Functions have a 4.5 MB request body limit. All PDFs 
 - Best-effort readable text extraction for legacy DOC files.
 - Metadata detection for document title, meeting/event date, jurisdiction, agency/governing body, document type, and uploaded file name.
 - Civic/policy relevance check before generating flags.
+- Agenda scoping that excludes routine meeting procedures, public participation boilerplate, ADA accommodation logistics, and prior-meeting minutes/summaries from Civic Flags.
 - Topic selection with default issues and custom issues.
 - OpenAI structured-output analysis when an API key is configured, shown in the UI as "AI analysis mode".
 - Clearly labeled keyword fallback when no API key is configured, shown in the UI as "Fallback keyword mode".
